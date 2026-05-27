@@ -14,7 +14,7 @@ Mango-Mamba芒果叶病害轻量级检测模型结果复现仓库
 
 ## 二、python环境配置
 
-1.新建Colab单元格内，执行
+1.新建Colab单元格，执行
 
 ```
 !pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
@@ -24,7 +24,7 @@ Mango-Mamba芒果叶病害轻量级检测模型结果复现仓库
 
 
 
-2.新建Colab单元格内，执行
+2.新建Colab单元格，执行
 
 ```
 !pip install einops timm
@@ -38,7 +38,7 @@ Mango-Mamba芒果叶病害轻量级检测模型结果复现仓库
 
 ## 三、仓库克隆
 
-新建Colab单元格内，执行
+新建Colab单元格，执行
 
 ```
 !git clone https://github.com/hzau-wujing/Reproduction-of-Mango-Mamba-Project
@@ -58,7 +58,7 @@ Mango-Mamba芒果叶病害轻量级检测模型结果复现仓库
 
 ## 五、混淆矩阵与热力图代码复现
 
-新建Colab单元格内，执行
+新建Colab单元格，执行
 
 ```
 !python /content/Reproduction-of-Mango-Mamba-Project/pic.py
