@@ -1,0 +1,211 @@
+---
+title: "Mango-Mamba 芒果叶病害轻量级检测模型复现"
+author: "吴靖及小组成员"
+date: "2026-04-03"
+repo-url: "https://github.com/D2RS-2026spring/Reproduction-of-Mango-Mamba-Project"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    code-fold: false
+execute:
+  eval: false
+---
+
+> 📦 **源代码**: [GitHub 仓库](https://github.com/D2RS-2026spring/Reproduction-of-Mango-Mamba-Project)
+
+## 研究背景
+
+本项目复现 Mango-Mamba：一种基于 Mamba 架构的芒果叶病害轻量级检测模型。该模型采用三阶段课程学习策略 (Three-Phase Curriculum Training)，在 VN-MangoLeaf 数据集上实现 7 类芒果叶病害的分类检测。
+
+**复现环境要求：** Google Colab + T4 GPU
+
+## 数据集
+
+VN-MangoLeaf 数据集包含 7 类芒果叶病害图像：
+
+| 类别 | 描述 |
+|------|------|
+| Healthy | 健康叶片 |
+| Anthracnose | 炭疽病 |
+| Gall_Midge | 瘿蚊害 |
+| Dieback | 枯梢病 |
+| Sooty_Mold | 煤污病 |
+| Powdery_Mildew | 白粉病 |
+| Red_Rust | 红锈病 |
+
+## 环境配置
+
+### 步骤一：创建 Colaboratory
+
+1. 在 [Google 云端硬盘](https://drive.google.com/drive/home) 新建一个 Colaboratory
+2. 点击修改 → 笔记本设置，运行时类型选择 Python 3，硬件加速器选择 T4 GPU
+
+### 步骤二：安装依赖
+
+```{python}
+# 安装 PyTorch (CUDA 12.1)
+!pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+
+# 安装其他依赖
+!pip install einops timm
+!pip install "mamba-ssm<2.3" "transformers<4.36" --no-build-isolation -v
+```
+
+### 步骤三：克隆仓库
+
+```{python}
+!git clone https://github.com/D2RS-2026spring/Reproduction-of-Mango-Mamba-Project
+```
+
+## 模型训练
+
+训练代码采用三阶段课程学习策略，核心超参数如下：
+
+- **Batch Size**: 32
+- **Epochs**: 30
+- **Learning Rate**: 1e-3 (AdamW + CosineAnnealing)
+- **数据划分**: 80% 训练 / 20% 验证
+
+```{python}
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision.datasets import ImageFolder
+import torchvision.transforms as T
+from tqdm import tqdm
+from pathlib import Path
+
+# 路径配置
+BASE = "/content/Reproduction-of-Mango-Mamba-Project/Mango-Mamba-and-VN-MangoLeaf-main"
+DATASET = "/content/Reproduction-of-Mango-Mamba-Project/VN-MangoLeaf"
+sys.path.append(BASE)
+
+from models.mango_mamba import mango_mamba_tiny
+
+# 超参数
+BATCH_SIZE = 32
+EPOCHS = 30
+LR = 1e-3
+NUM_CLASSES = 7
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# 数据增强
+train_transform = T.Compose([
+    T.Resize((224, 224)),
+    T.RandomHorizontalFlip(p=0.5),
+    T.RandomVerticalFlip(p=0.5),
+    T.RandomRotation(15),
+    T.ToTensor(),
+    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+# 加载数据集
+dataset = ImageFolder(DATASET, transform=train_transform)
+train_size = int(0.8 * len(dataset))
+val_size = len(dataset) - train_size
+train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+
+# 初始化模型
+model = mango_mamba_tiny(
+    num_classes=NUM_CLASSES,
+    window_size=[7,7,7,7],
+    mixer_mode='hybrid',
+    use_eca=True,
+    use_grn=True,
+    use_swiglu=True
+).to(DEVICE)
+
+# 损失函数 & 优化器
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=5e-2)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+```
+
+## 可视化分析
+
+### 混淆矩阵
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+CLASS_NAMES = ['Healthy', 'Anthracnose', 'Gall_Midge', 'Dieback',
+               'Sooty_Mold', 'Powdery_Mildew', 'Red_Rust']
+
+# 生成混淆矩阵
+cm = confusion_matrix(all_gts, all_preds, normalize='true')
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=CLASS_NAMES)
+
+plt.figure(figsize=(10,8))
+disp.plot(cmap=plt.cm.Blues, values_format='.2f', ax=plt.gca())
+plt.title('MangoMamba - VN-MangoLeaf Confusion Matrix', fontsize=14, pad=20)
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.savefig("confusion_matrix.png", dpi=300)
+```
+
+### Grad-CAM 热力图
+
+使用 Grad-CAM 可视化模型关注区域，帮助理解模型的决策依据：
+
+```{python}
+import cv2
+
+class GradCAM:
+    def __init__(self, model, target_layer):
+        self.model = model
+        self.gradients = None
+        self.activations = None
+        target_layer.register_forward_hook(self.save_activation)
+        target_layer.register_full_backward_hook(self.save_gradient)
+
+    def save_activation(self, module, inp, out):
+        self.activations = out
+
+    def save_gradient(self, module, grad_in, grad_out):
+        self.gradients = grad_out[0]
+
+    def __call__(self, x):
+        self.model.zero_grad()
+        out = self.model(x)['logits']
+        class_idx = out.argmax(1).item()
+        out[0, class_idx].backward()
+        weights = torch.mean(self.gradients, dim=[2,3], keepdim=True)
+        cam = torch.sum(weights * self.activations, dim=1).squeeze()
+        cam = torch.relu(cam)
+        cam = cam - cam.min()
+        cam = cam / cam.max()
+        return cam.cpu().detach().numpy(), class_idx
+
+# 为每个类别生成 Grad-CAM
+grad_cam = GradCAM(model, model.norm)
+for cls_name in CLASS_NAMES:
+    idx = class_to_idx[cls_name]
+    img_path = [s for s, l in ds.samples if l == idx][0]
+    img = Image.open(img_path).convert("RGB")
+    img_t = transform(img).unsqueeze(0).to(device)
+    cam, pred_idx = grad_cam(img_t)
+    # 叠加热力图到原图
+    cam = cv2.resize(cam, (224,224))
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+    overlay = heatmap * 0.4 + img_np * 0.6
+```
+
+## 复现结果
+
+在 Colab T4 GPU 上运行 `train.py` 和 `pic.py` 后，可获得：
+
+1. **训练好的模型权重** — 保存在 `trained_weights/mangomamba_best.pth`
+2. **混淆矩阵** — 展示各类别的分类精度
+3. **Grad-CAM 热力图** — 展示模型对每类病害的关注区域
+
+## 团队分工
+
+- **吴靖**：项目组长，负责模型复现与训练
+- **小组成员**：参与数据处理与结果分析
